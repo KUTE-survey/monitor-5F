@@ -32,9 +32,10 @@ except urllib.error.HTTPError as e:
     print('エラー詳細:', e.read().decode('utf-8'))
     exit(1)
 
-# ★★★ 使いたい機器のシリアル番号をここだけ変える ★★★
-TARGET_SERIAL = 'E2BA0923'
-# ★★★★★★★★★★★★★★★★★★★★★★★★★★★★
+# =============================================
+# ★★★ フロアごとに変えるのはここだけ ★★★
+TARGET_SERIAL = 'E2BA0923'   # ← シリアル番号を変える
+# =============================================
 
 target = None
 for d in raw['devices']:
@@ -48,26 +49,45 @@ if target is None:
 
 print('使用機器:', target.get('name'), target.get('serial'))
 
-temp = float(target['channel'][0]['value'])
-hum  = float(target['channel'][1]['value'])
-
 try:
-    existing = json.load(open('data.json'))
-    history  = existing.get('history', [])
-except:
+    temp = float(target['channel'][0]['value'])
+except (ValueError, TypeError, IndexError):
+    print('温度のCommunication Errorのため前回の値を維持します')
+    exit(0)
+
+# nowをAPIアクセス成功後に定義
+now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
+today_str = now.strftime('%Y-%m-%d')
+
+# 既存のdata.jsonを読み込んでhistoryを引き継ぐ
+try:
+    with open('data.json') as f:
+        existing = json.load(f)
+    history = existing.get('history', [])
+    # 今日のデータだけ残す
+    history = [h for h in history if h.get('date') == today_str]
+    # 直近60件がすべて同じ温度なら書き込みをスキップ（センサー通信不良対策）
+    if len(history) >= 60:
+        last_60_temps = [h['temp'] for h in history[-60:]]
+        if len(set(last_60_temps)) == 1 and last_60_temps[0] == temp:
+            print(f'直近60件すべて{temp}℃で変化なし。センサー通信不良の可能性があるためスキップします')
+            exit(0)
+except Exception:
     history = []
 
-now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
-history.append({'time': now.strftime('%H:%M'), 'temp': temp, 'hum': hum})
-history = history[-24:]
+history.append({
+    'date': today_str,
+    'time': now.strftime('%H:%M'),
+    'temp': temp,
+})
+history = history[-300:]
 
 out = {
-    'temperature':     temp,
-    'humidity':        hum,
-    'set_temperature': 28,
-    'updated_at':      now.isoformat(),
-    'history':         history
+    'temperature': temp,
+    'updated_at':  now.isoformat(),
+    'history':     history
 }
 
-json.dump(out, open('data.json', 'w'), ensure_ascii=False, indent=2)
-print('完了:', temp, hum)
+with open('data.json', 'w') as f:
+    json.dump(out, f, ensure_ascii=False, indent=2)
+print('完了:', temp)
